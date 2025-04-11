@@ -152,28 +152,59 @@ function startFFmpegEncoding(inputPath, outputPath, useHardwareAcceleration, job
       const sourceFileSize = job.original_size_bytes;
       
       // Build FFmpeg command
-      let ffmpegArgs = [
-        '-i', inputPath,
-        '-c:v', useHardwareAcceleration ? 'hevc_qsv' : 'libx265',
-        '-preset', useHardwareAcceleration ? qsvPresets.quality : 'medium',
-        '-crf', '28',                  // Constant Rate Factor for quality
-        '-pix_fmt', 'p010le',          // 10-bit pixel format
-        '-tag:v', 'hvc1',              // Makes HEVC videos compatible with Apple devices
-        '-c:a', 'copy',                // Copy audio streams without re-encoding
-        '-c:s', 'copy',                // Copy subtitle streams
-        outputPath
-      ];
+      let ffmpegArgs = [];
       
-      // Add Intel Arc specific options if available
       if (useHardwareAcceleration) {
+        // Intel Arc specific configuration for Windows
         ffmpegArgs = [
+          // Hardware acceleration setup
           '-hwaccel', 'qsv',              // Use Intel QuickSync hardware acceleration
           '-hwaccel_device', '0',         // Specify GPU device (0 is usually the first/primary GPU)
-          ...ffmpegArgs,
-          '-load_plugin', 'hevc_hw',      // Load HEVC hardware plugin for Intel QSV
-          '-profile:v', qsvPresets.profile // Use 10-bit profile for better quality
+          
+          // Input file
+          '-i', inputPath,
+          
+          // Video codec settings - optimized for Intel Arc on Windows
+          '-c:v', 'hevc_qsv',             // Use Intel QSV HEVC encoder
+          '-preset', qsvPresets.quality,  // Quality preset
+          '-profile:v', qsvPresets.profile, // Use 10-bit profile
+          '-b:v', '0',                    // Use CRF for quality-based encoding
+          '-crf', '23',                   // Quality level (lower is better quality but larger file)
+          '-pix_fmt', 'p010le',           // 10-bit pixel format
+          '-load_plugin', 'hevc_hw',      // Load Intel HEVC hw plugin
+          '-tag:v', 'hvc1',               // Makes HEVC videos compatible with Apple devices
+          
+          // Audio and subtitle settings
+          '-c:a', 'copy',                 // Copy audio streams without re-encoding
+          '-c:s', 'copy',                 // Copy subtitle streams
+          
+          // Output file
+          outputPath
+        ];
+      } else {
+        // Software encoding fallback
+        ffmpegArgs = [
+          // Input file
+          '-i', inputPath,
+          
+          // Video codec settings for software encoding
+          '-c:v', 'libx265',              // Use software HEVC encoder
+          '-preset', 'medium',            // Reasonable balance of speed/quality
+          '-crf', '28',                   // Quality level for software encoding
+          '-pix_fmt', 'p010le',           // 10-bit pixel format
+          '-tag:v', 'hvc1',               // Makes HEVC videos compatible with Apple devices
+          
+          // Audio and subtitle settings
+          '-c:a', 'copy',                 // Copy audio streams without re-encoding
+          '-c:s', 'copy',                 // Copy subtitle streams
+          
+          // Output file
+          outputPath
         ];
       }
+      
+      // Log the command for debugging
+      console.log('FFmpeg command:', 'ffmpeg', ffmpegArgs.join(' '));
       
       // Start FFmpeg process
       const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
@@ -395,27 +426,56 @@ async function restartJob(jobId) {
  */
 async function getGpuInfo() {
   try {
-    // For Windows, we would use a native module to detect GPUs
-    // This is a simplified version that assumes the presence
-    // of Intel Arc if the platform is Windows
-    // In a real implementation, we would use something like node-gpu or a custom native module
-    
+    // For Windows, we detect Intel Arc GPU through a combination of methods
+    // In a production implementation, we would use a more robust detection method
     const isWindows = process.platform === 'win32';
+    let hasIntelArc = false;
+    let gpuDetails = {};
+    
+    if (isWindows) {
+      try {
+        // On Windows, attempt to detect Intel Arc GPU
+        // This is a simplified implementation - in a real app, use more robust detection
+        // Potentially using Windows Management Instrumentation (WMI) or another native module
+        
+        // Simulate GPU detection for demo purposes
+        // In a real implementation, we'd use actual GPU detection code:
+        // const { exec } = require('child_process');
+        // const wmic = await new Promise((resolve, reject) => {
+        //   exec('wmic path win32_VideoController get name', (error, stdout) => {
+        //     if (error) reject(error);
+        //     else resolve(stdout);
+        //   });
+        // });
+        // hasIntelArc = wmic.toLowerCase().includes('intel arc');
+        
+        // For demonstration, we'll assume it's present on Windows
+        hasIntelArc = true;
+        gpuDetails = {
+          name: 'Intel Arc GPU',
+          driver: 'Latest Intel Graphics Driver',
+          supportedEncoders: ['h264_qsv', 'hevc_qsv'],
+          maxEncodeResolution: '4K',
+          device: 0 // Device ID for Intel GPU
+        };
+      } catch (detectionError) {
+        console.error('Error detecting GPU:', detectionError);
+        hasIntelArc = false;
+      }
+    }
     
     return {
-      hasIntelArc: isWindows, // Simplified detection for demo purposes
+      hasIntelArc,
       platform: process.platform,
-      details: {
-        name: 'Intel Arc GPU',
-        driver: 'Latest Intel Graphics Driver',
-        supportedEncoders: ['h264_qsv', 'hevc_qsv']
-      }
+      details: hasIntelArc ? gpuDetails : null,
+      fallbackToSoftware: !hasIntelArc
     };
   } catch (error) {
     console.error('Error getting GPU info:', error);
     return {
       hasIntelArc: false,
-      error: error.message
+      error: error.message,
+      fallbackToSoftware: true
     };
   }
 }
